@@ -5,9 +5,11 @@ import { wa } from '@api/types/wa.types';
 import { configService, Log, Webhook } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 // import { BadRequestException } from '@exceptions';
-import axios, { AxiosInstance } from 'axios';
+import type { AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
 import * as jwt from 'jsonwebtoken';
+
+import { createSafeWebhookClient } from '@utils/safe-webhook';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
 
@@ -89,7 +91,6 @@ export class WebhookController extends EventController implements EventControlle
     const we = event.replace(/[.-]/gm, '_').toUpperCase();
     const transformedWe = we.replace(/_/gm, '-').toLowerCase();
     const enabledLog = configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS');
-    const regex = /^(https?:\/\/)/;
 
     const webhookData = {
       ...(extra ?? {}),
@@ -124,8 +125,10 @@ export class WebhookController extends EventController implements EventControlle
         }
 
         try {
-          if (instance?.enabled && regex.test(instance.url)) {
-            // Add custom headers for better webhook tracking and debugging
+          if (instance?.enabled) {
+            // Add custom headers for better webhook tracking and debugging.
+            // The client validates and pins public DNS answers, rejects plain
+            // HTTP/private destinations and disables redirects and proxies.
             const enhancedHeaders = {
               ...webhookHeaders,
               'Content-Type': 'application/json',
@@ -136,11 +139,11 @@ export class WebhookController extends EventController implements EventControlle
               'User-Agent': 'EvolutionAPI-Webhook/2.3.7',
             };
 
-            const httpService = axios.create({
+            const httpService = await createSafeWebhookClient(
               baseURL,
-              headers: enhancedHeaders as Record<string, string>,
-              timeout: webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
-            });
+              webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
+              enhancedHeaders as Record<string, string>,
+            );
 
             await this.retryWebhookRequest(httpService, webhookData, `${origin}.sendData-Webhook`, baseURL, serverUrl);
           }
@@ -175,20 +178,18 @@ export class WebhookController extends EventController implements EventControlle
         }
 
         try {
-          if (regex.test(globalURL)) {
-            const httpService = axios.create({
-              baseURL: globalURL,
-              timeout: webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
-            });
+          const httpService = await createSafeWebhookClient(
+            globalURL,
+            webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
+          );
 
-            await this.retryWebhookRequest(
-              httpService,
-              webhookData,
-              `${origin}.sendData-Webhook-Global`,
-              globalURL,
-              serverUrl,
-            );
-          }
+          await this.retryWebhookRequest(
+            httpService,
+            webhookData,
+            `${origin}.sendData-Webhook-Global`,
+            globalURL,
+            serverUrl,
+          );
         } catch (error) {
           this.logger.error({
             local: `${origin}.sendData-Webhook-Global`,
@@ -237,7 +238,12 @@ export class WebhookController extends EventController implements EventControlle
 
         const isTimeout = error.code === 'ECONNABORTED';
 
-        if (error?.response?.status && nonRetryableStatusCodes.includes(error.response.status)) {
+        const responseStatus = error?.response?.status;
+        if (
+          responseStatus &&
+          (nonRetryableStatusCodes.includes(responseStatus) ||
+            (responseStatus >= 300 && responseStatus < 400))
+        ) {
           this.logger.error({
             local: `${origin}`,
             message: 'Non-retryable webhook response; cancelling retries',
