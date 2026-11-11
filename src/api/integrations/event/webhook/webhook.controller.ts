@@ -6,6 +6,7 @@ import { configService, Log, Webhook } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 // import { BadRequestException } from '@exceptions';
 import axios, { AxiosInstance } from 'axios';
+import { randomUUID } from 'crypto';
 import * as jwt from 'jsonwebtoken';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
@@ -115,8 +116,8 @@ export class WebhookController extends EventController implements EventControlle
         if (enabledLog) {
           const logData = {
             local: `${origin}.sendData-Webhook`,
-            url: baseURL,
-            ...webhookData,
+            event,
+            destinationHost: this.destinationHost(baseURL),
           };
 
           this.logger.log(logData);
@@ -146,15 +147,10 @@ export class WebhookController extends EventController implements EventControlle
         } catch (error) {
           this.logger.error({
             local: `${origin}.sendData-Webhook`,
-            message: `Todas as tentativas falharam: ${error?.message}`,
-            hostName: error?.hostname,
-            syscall: error?.syscall,
+            message: 'Webhook delivery failed after all attempts',
             code: error?.code,
-            error: error?.errno,
-            stack: error?.stack,
-            name: error?.name,
-            url: baseURL,
-            server_url: serverUrl,
+            statusCode: error?.response?.status,
+            destinationHost: this.destinationHost(baseURL),
           });
         }
       }
@@ -171,8 +167,8 @@ export class WebhookController extends EventController implements EventControlle
         if (enabledLog) {
           const logData = {
             local: `${origin}.sendData-Webhook-Global`,
-            url: globalURL,
-            ...webhookData,
+            event,
+            destinationHost: this.destinationHost(globalURL),
           };
 
           this.logger.log(logData);
@@ -196,15 +192,10 @@ export class WebhookController extends EventController implements EventControlle
         } catch (error) {
           this.logger.error({
             local: `${origin}.sendData-Webhook-Global`,
-            message: `Todas as tentativas falharam: ${error?.message}`,
-            hostName: error?.hostname,
-            syscall: error?.syscall,
+            message: 'Global webhook delivery failed after all attempts',
             code: error?.code,
-            error: error?.errno,
-            stack: error?.stack,
-            name: error?.name,
-            url: globalURL,
-            server_url: serverUrl,
+            statusCode: error?.response?.status,
+            destinationHost: this.destinationHost(globalURL),
           });
         }
       }
@@ -236,8 +227,8 @@ export class WebhookController extends EventController implements EventControlle
         if (attempts > 0) {
           this.logger.log({
             local: `${origin}`,
-            message: `Sucesso no envio após ${attempts + 1} tentativas`,
-            url: baseURL,
+            message: `Webhook delivered after ${attempts + 1} attempts`,
+            destinationHost: this.destinationHost(baseURL),
           });
         }
         return;
@@ -249,27 +240,20 @@ export class WebhookController extends EventController implements EventControlle
         if (error?.response?.status && nonRetryableStatusCodes.includes(error.response.status)) {
           this.logger.error({
             local: `${origin}`,
-            message: `Erro não recuperável (${error.response.status}): ${error?.message}. Cancelando retentativas.`,
+            message: 'Non-retryable webhook response; cancelling retries',
             statusCode: error?.response?.status,
-            url: baseURL,
-            server_url: serverUrl,
+            destinationHost: this.destinationHost(baseURL),
           });
           throw error;
         }
 
         this.logger.error({
           local: `${origin}`,
-          message: `Tentativa ${attempts}/${maxRetryAttempts} falhou: ${isTimeout ? 'Timeout da requisição' : error?.message}`,
-          hostName: error?.hostname,
-          syscall: error?.syscall,
+          message: `Webhook attempt ${attempts}/${maxRetryAttempts} failed`,
           code: error?.code,
           isTimeout,
           statusCode: error?.response?.status,
-          error: error?.errno,
-          stack: error?.stack,
-          name: error?.name,
-          url: baseURL,
-          server_url: serverUrl,
+          destinationHost: this.destinationHost(baseURL),
         });
 
         if (attempts === maxRetryAttempts) {
@@ -286,12 +270,20 @@ export class WebhookController extends EventController implements EventControlle
 
         this.logger.log({
           local: `${origin}`,
-          message: `Aguardando ${nextDelay.toFixed(1)} segundos antes da próxima tentativa`,
-          url: baseURL,
+          message: `Waiting ${nextDelay.toFixed(1)} seconds before the next webhook attempt`,
+          destinationHost: this.destinationHost(baseURL),
         });
 
         await new Promise((resolve) => setTimeout(resolve, nextDelay * 1000));
       }
+    }
+  }
+
+  private destinationHost(rawUrl: string): string {
+    try {
+      return new URL(rawUrl).host;
+    } catch {
+      return '[invalid-destination]';
     }
   }
 
@@ -300,6 +292,7 @@ export class WebhookController extends EventController implements EventControlle
       const payload = {
         iat: Math.floor(Date.now() / 1000),
         exp: Math.floor(Date.now() / 1000) + 600, // 10 min expiration
+        jti: randomUUID(),
         app: 'evolution',
         action: 'webhook',
       };
