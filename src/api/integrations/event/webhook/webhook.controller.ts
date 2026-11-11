@@ -4,12 +4,11 @@ import { WAMonitoringService } from '@api/services/monitor.service';
 import { wa } from '@api/types/wa.types';
 import { configService, Log, Webhook } from '@config/env.config';
 import { Logger } from '@config/logger.config';
+import { createSafeWebhookClient } from '@utils/safe-webhook';
 // import { BadRequestException } from '@exceptions';
 import type { AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
 import * as jwt from 'jsonwebtoken';
-
-import { createSafeWebhookClient } from '@utils/safe-webhook';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
 
@@ -178,10 +177,7 @@ export class WebhookController extends EventController implements EventControlle
         }
 
         try {
-          const httpService = await createSafeWebhookClient(
-            globalURL,
-            webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
-          );
+          const httpService = await createSafeWebhookClient(globalURL, webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000);
 
           await this.retryWebhookRequest(
             httpService,
@@ -241,8 +237,7 @@ export class WebhookController extends EventController implements EventControlle
         const responseStatus = error?.response?.status;
         if (
           responseStatus &&
-          (nonRetryableStatusCodes.includes(responseStatus) ||
-            (responseStatus >= 300 && responseStatus < 400))
+          (nonRetryableStatusCodes.includes(responseStatus) || (responseStatus >= 300 && responseStatus < 400))
         ) {
           this.logger.error({
             local: `${origin}`,

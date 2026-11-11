@@ -1,7 +1,8 @@
-import axios, { type AxiosInstance } from 'axios';
-import { promises as dns, type LookupAddress } from 'node:dns';
+import { type LookupAddress, promises as dns } from 'node:dns';
 import { Agent } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
+
+import axios, { type AxiosInstance } from 'axios';
 
 const blockedAddresses = new BlockList();
 
@@ -69,12 +70,7 @@ export async function createSafeWebhookClient(
     throw new Error('Invalid webhook destination');
   }
 
-  if (
-    destination.protocol !== 'https:' ||
-    destination.username ||
-    destination.password ||
-    destination.hash
-  ) {
+  if (destination.protocol !== 'https:' || destination.username || destination.password || destination.hash) {
     throw new Error('Webhook destination must be credential-free HTTPS');
   }
 
@@ -86,10 +82,7 @@ export async function createSafeWebhookClient(
     .replace(/^\[|\]$/g, '');
   const dnsTimeout = Math.max(1, Math.min(timeout, 10000));
   const answers = await new Promise<LookupAddress[]>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Webhook DNS lookup timed out')),
-      dnsTimeout,
-    );
+    const timer = setTimeout(() => reject(new Error('Webhook DNS lookup timed out')), dnsTimeout);
     dns.lookup(hostname, { all: true, verbatim: true }).then(
       (result) => {
         clearTimeout(timer);
@@ -113,19 +106,19 @@ export async function createSafeWebhookClient(
       .toLowerCase()
       .replace(/\.$/, '')
       .replace(/^\[|\]$/g, '');
-    const requestedFamily = typeof options === 'object' ? options.family : options;
-    const eligible =
-      requestedFamily === 4 || requestedFamily === 6
-        ? answers.filter((answer) => answer.family === requestedFamily)
-        : answers;
+    const requestedFamilyOption = typeof options === 'object' ? options.family : options;
+    const requestedFamily =
+      requestedFamilyOption === 4 || requestedFamilyOption === 'IPv4'
+        ? 4
+        : requestedFamilyOption === 6 || requestedFamilyOption === 'IPv6'
+          ? 6
+          : 0;
+    const eligible = requestedFamily ? answers.filter((answer) => answer.family === requestedFamily) : answers;
 
     if (requested !== hostname || eligible.length === 0) {
-      const error = Object.assign(
-        new Error('Webhook hostname or address family changed after validation'),
-        {
-          code: 'ENOTFOUND',
-        },
-      );
+      const error = Object.assign(new Error('Webhook hostname or address family changed after validation'), {
+        code: 'ENOTFOUND',
+      });
       callback(error, '', requestedFamily || 0);
       return;
     }
