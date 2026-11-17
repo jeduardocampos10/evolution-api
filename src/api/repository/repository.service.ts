@@ -17,8 +17,14 @@ function createPrismaAdapter(connectionString: string) {
   if (provider === 'mysql') {
     return new PrismaMariaDb(connectionString);
   }
-  // postgresql e psql_bouncer usam o adapter do Postgres
-  return new PrismaPg(connectionString);
+
+  // `pg` ignores Prisma's `?schema=` URL parameter. Pass it explicitly to
+  // PrismaPg so runtime queries use the same schema as Prisma Migrate.
+  const connectionUrl = new URL(connectionString);
+  const schema = connectionUrl.searchParams.get('schema') ?? undefined;
+  connectionUrl.searchParams.delete('schema');
+
+  return new PrismaPg({ connectionString: connectionUrl.toString() }, schema ? { schema } : undefined);
 }
 
 export class PrismaRepository extends PrismaClient {
